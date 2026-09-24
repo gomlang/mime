@@ -1,0 +1,82 @@
+package main;
+
+use ecosystem::mime;
+use ecosystem::mime::quotedprintable;
+use ecosystem::mime::multipart;
+use ecosystem::textproto;
+use std::bytes;
+use std::io;
+use std::testing;
+
+pub fn exercise() -> Result[(), mime::Error] {
+    let limits = mime::Limits::standard();
+    let media = mime::parse_media_type(
+        "text/plain; filename*1*=%AD.txt; filename*0*=utf-8''%E4%B8",
+        limits,
+    )?;
+    testing::assert_eq(media.essence, "text/plain");
+    testing::assert_eq(testing::expect_some(media.parameter("filename"), "filename"), "中.txt");
+    let encoded = mime::encode_word("中文", mime::WordEncoding::Quoted, limits)?;
+    testing::assert_eq(mime::decode_header(encoded, limits)?, "中文");
+    Result::Ok(())
+}
+
+pub fn exercise_quotedprintable() -> Result[(), quotedprintable::Error] {
+    let source = bytes::Bytes::from_vec(b"message = \r\nbody\t");
+    let sink = io::Cursor::new(bytes::Bytes::new());
+    let writer = quotedprintable::Writer::new(sink, quotedprintable::Limits::standard())?;
+    let _ = writer.write_chunk(source.slice(0, 5))?;
+    let _ = writer.write_chunk(source.slice(5, source.len()))?;
+    writer.finish()?;
+    let reader = quotedprintable::Reader::new(
+        io::Cursor::new(sink.bytes()),
+        quotedprintable::Limits::standard(),
+    )?;
+    let output = bytes::Bytes::new();
+    let scratch = bytes::Bytes::from_vec(Vec::from_array([0.to_u8(), 0.to_u8(), 0.to_u8()]));
+    loop {
+        let count = reader.read_chunk(scratch.as_mut_slice())?;
+        if count == 0 {
+            break
+        }
+        output.extend_from_slice(scratch.slice(0, count));
+    }
+    testing::assert(output.to_vec() == source.to_vec());
+    Result::Ok(())
+}
+
+pub fn exercise_multipart() -> Result[(), multipart::Error] {
+    let sink = io::Cursor::new(bytes::Bytes::new());
+    let writer = multipart::Writer::new(sink, "example-boundary", multipart::Limits::standard())?;
+    let headers = textproto::Headers::new();
+    testing::assert_ok(headers.append("Content-Type", bytes::Bytes::from_vec(b"text/plain")));
+    writer.begin_part(headers)?;
+    let _ = writer.write_body_chunk(b"hello".as_slice())?;
+    let _ = writer.write_body_chunk(b"\r\nworld".as_slice())?;
+    writer.finish()?;
+    let reader = multipart::Reader::new(
+        io::Cursor::new(sink.bytes()),
+        "example-boundary",
+        multipart::Limits::standard(),
+    )?;
+    testing::assert_some(reader.next_part()?);
+    let output = bytes::Bytes::new();
+    let scratch = bytes::Bytes::from_vec(Vec::from_array([0.to_u8(), 0.to_u8(), 0.to_u8()]));
+    loop {
+        let count = reader.read_body_chunk(scratch.as_mut_slice())?;
+        if count == 0 {
+            break
+        }
+        output.extend_from_slice(scratch.slice(0, count));
+    }
+    testing::assert(output.to_vec() == b"hello\r\nworld");
+    testing::assert_none(reader.next_part()?);
+    Result::Ok(())
+}
+
+fn main() -> () {
+    testing::assert_ok(exercise());
+    testing::assert_ok(exercise_quotedprintable());
+    testing::assert_ok(exercise_multipart());
+    println("mime consumer: media values, quoted-printable and multipart passed");
+}
