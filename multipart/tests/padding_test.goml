@@ -1,0 +1,163 @@
+package tests;
+
+use ecosystem::mime::multipart::{ErrorKind, Limits, Reader, Writer};
+use ecosystem::textproto;
+use std::bytes;
+use std::io;
+use std::testing;
+
+#[test]
+fn transport_padding_is_accepted_on_every_delimiter_and_at_closing_eof() -> () {
+    for ending in["\r\n", ""] {
+        let wire = bytes::Bytes::from_string(
+            "preamble\r\n--x \t\r\n\r\none\r\n--x\t \r\n\r\ntwo\r\n--x-- \t" + ending,
+        );
+        let reader = testing::expect_ok(
+            Reader::new(
+                FragmentedReader { data: wire, position: Ref::new(0) },
+                "x",
+                Limits::standard(),
+            ),
+            "reader",
+        );
+        for expected in[b"one", b"two"] {
+            testing::assert_some(testing::expect_ok(reader.next_part(), "part"));
+            testing::assert(testing::expect_ok(body(reader, 1), "body").to_vec() == expected);
+        }
+        testing::assert_none(testing::expect_ok(reader.next_part(), "done"));
+        testing::assert_eq(reader.body_bytes(), 6);
+    }
+    let reader = testing::expect_ok(
+        Reader::new(io::Cursor::new(bytes::Bytes::from_vec(b"--x-- \t")), "x", Limits::standard()),
+        "empty",
+    );
+    testing::assert_none(testing::expect_ok(reader.next_part(), "empty"));
+}
+
+#[test]
+fn padded_boundary_candidates_preserve_body_and_enforce_line_budget() -> () {
+    let value = "a\r\n--x \tX\r\n--x\t\rX\r\n--x-- \tX";
+    let reader = testing::expect_ok(
+        Reader::new(
+            io::Cursor::new(bytes::Bytes::from_string("--x\r\n\r\n" + value + "\r\n--x--\r\n")),
+            "x",
+            Limits::standard(),
+        ),
+        "reader",
+    );
+    testing::assert_some(testing::expect_ok(reader.next_part(), "part"));
+    testing::assert(testing::expect_ok(body(reader, 2), "body").to_vec() == value.to_bytes());
+    for limit in[6, 7] {
+        let reader = testing::expect_ok(
+            Reader::new(
+                FragmentedReader {
+                    data: bytes::Bytes::from_vec(b"--x \t\r\n\r\nz\r\n--x-- \t\r\n"),
+                    position: Ref::new(0),
+                },
+                "x",
+                Limits { max_line_bytes: limit, ..Limits::standard() },
+            ),
+            "bounded",
+        );
+        testing::assert_some(testing::expect_ok(reader.next_part(), "part"));
+        if limit == 6 {
+            testing::assert_eq(
+                testing::expect_err(body(reader, 1), "padding budget").kind,
+                ErrorKind::Limit,
+            );
+        } else {
+            testing::assert(testing::expect_ok(body(reader, 1), "exact budget").to_vec() == b"z");
+        }
+    }
+    let reader = testing::expect_ok(
+        Reader::new(
+            io::Cursor::new(bytes::Bytes::from_vec(b"--x \t \r\n\r\n")),
+            "x",
+            Limits { max_line_bytes: 5, ..Limits::standard() },
+        ),
+        "bounded first",
+    );
+    testing::assert_eq(
+        testing::expect_err(reader.next_part(), "first boundary limit").kind,
+        ErrorKind::Limit,
+    );
+}
+
+#[test]
+fn writer_detects_padded_collisions_across_chunks_and_at_part_end() -> () {
+    let collision = bytes::Bytes::from_vec(b"payload\r\n--x \t\r\n");
+    for split in 0..collision.len() + 1 {
+        let writer = testing::expect_ok(
+            Writer::new(io::Cursor::new(bytes::Bytes::new()), "x", Limits::standard()),
+            "writer",
+        );
+        testing::assert_ok(writer.begin_part(textproto::Headers::new()));
+        let first = writer.write_body_chunk(collision.slice(0, split));
+        let second = if first.is_ok() {
+            writer.write_body_chunk(collision.slice(split, collision.len()))
+        } else {
+            first
+        };
+        testing::assert_eq(testing::expect_err(second, "collision").kind, ErrorKind::Boundary);
+        testing::assert_eq(
+            testing::expect_err(writer.finish(), "failed writer").kind,
+            ErrorKind::Closed,
+        );
+    }
+    for next_part in[false, true] {
+        let writer = testing::expect_ok(
+            Writer::new(io::Cursor::new(bytes::Bytes::new()), "x", Limits::standard()),
+            "writer",
+        );
+        testing::assert_ok(writer.begin_part(textproto::Headers::new()));
+        testing::assert_ok(writer.write_body_chunk(b"a\r\n--x \t".as_slice()));
+        testing::assert_eq(
+            testing::expect_err(
+                if next_part {
+                    writer.begin_part(textproto::Headers::new())
+                } else {
+                    writer.finish()
+                },
+                "padded tail",
+            ).kind,
+            ErrorKind::Boundary,
+        );
+    }
+    let sink = io::Cursor::new(bytes::Bytes::new());
+    let writer = testing::expect_ok(Writer::new(sink, "x", Limits::standard()), "writer");
+    testing::assert_ok(writer.begin_part(textproto::Headers::new()));
+    let value = b"a\r\n--x \tX\r\n--x \t\rX";
+    for byte in value {
+        testing::assert_ok(writer.write_body_chunk(Vec::from_array([byte]).as_slice()));
+    }
+    testing::assert_ok(writer.finish());
+    let reader = testing::expect_ok(
+        Reader::new(io::Cursor::new(sink.bytes()), "x", Limits::standard()),
+        "reader",
+    );
+    testing::assert_some(testing::expect_ok(reader.next_part(), "part"));
+    testing::assert(testing::expect_ok(body(reader, 1), "body").to_vec() == value);
+}
+
+#[test]
+fn long_padding_candidates_remain_bounded_and_preserve_false_prefixes() -> () {
+    let padding = bytes::Bytes::new();
+    for _ in 0..4000 {
+        padding.push(b' ');
+    }
+    let value = bytes::Bytes::from_vec(b"before\r\n--x");
+    value.extend_from_slice(padding.as_slice());
+    value.extend_from_slice(b"X\r\nafter".as_slice());
+    let wire = bytes::Bytes::from_vec(b"--x\r\n\r\n");
+    wire.extend_from_slice(value.as_slice());
+    wire.extend_from_slice(b"\r\n--x--".as_slice());
+    wire.extend_from_slice(padding.as_slice());
+    wire.extend_from_slice(b"\r\n".as_slice());
+    let reader = testing::expect_ok(
+        Reader::new(FragmentedReader { data: wire, position: Ref::new(0) }, "x", Limits::standard()),
+        "reader",
+    );
+    testing::assert_some(testing::expect_ok(reader.next_part(), "part"));
+    testing::assert(testing::expect_ok(body(reader, 17), "body").to_vec() == value.to_vec());
+    testing::assert_none(testing::expect_ok(reader.next_part(), "done"));
+}

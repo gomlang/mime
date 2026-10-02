@@ -1,0 +1,19 @@
+package tests;
+
+use ecosystem::mime::multipart::{Limits, Reader};
+use std::bytes;
+use std::io;
+use std::testing;
+
+#[test]
+fn downstream_accepts_empty_padded_multipart() -> () {
+    let reader = testing::expect_ok(
+        Reader::new(
+            io::Cursor::new(bytes::Bytes::from_vec(b"--edge-- \t\r\n")),
+            "edge",
+            Limits::standard(),
+        ),
+        "reader",
+    );
+    testing::assert_none(testing::expect_ok(reader.next_part(), "empty"));
+}
