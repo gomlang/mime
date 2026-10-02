@@ -14,10 +14,14 @@ terminal. Boundary lines accept trailing ASCII space/tab transport padding as re
 [RFC 2046 section 5.1.1](https://www.rfc-editor.org/rfc/rfc2046.html#section-5.1.1),
 including the initial boundary, intervening boundaries and the closing delimiter.
 The closing delimiter may end with CRLF or at EOF after padding. Boundary line
-content, including marker and padding, is bounded by `max_line_bytes`; an
-oversized potential boundary fails before buffering arbitrary padding. False
-boundary prefixes remain body data within those bounds. The reader leaves
-any epilogue unread.
+content, including marker and padding, is bounded by `max_line_bytes`.
+Within a part body, oversized potential boundaries fail while padding is read;
+false boundary prefixes remain body data within those bounds. Before the first
+part, the reader buffers a complete line to distinguish preamble from a delimiter,
+then checks a recognized delimiter against `max_line_bytes`. That initial line
+buffer is bounded by the greater of `max_preamble_bytes`, `max_line_bytes` and
+the closing marker length, plus two CRLF bytes; `max_wire_bytes` also applies.
+The reader leaves any epilogue unread.
 
 `Limits` bounds wire bytes, preamble, headers, line and value bytes, part bytes,
 aggregate body bytes, and part count. The package preserves duplicate headers
