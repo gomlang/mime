@@ -1,0 +1,17 @@
+package tests;
+
+use ecosystem::mime;
+use std::testing;
+
+#[test]
+fn downstream_encodes_address_phrase_safely() -> () {
+    let encoded = testing::expect_ok(
+        mime::encode_word("Doe, Jane", mime::WordEncoding::Quoted, mime::Limits::standard()),
+        "phrase",
+    );
+    testing::assert_eq(encoded, "=?UTF-8?Q?Doe=2C_Jane?=");
+    testing::assert_eq(
+        testing::expect_ok(mime::decode_header(encoded, mime::Limits::standard()), "decode"),
+        "Doe, Jane",
+    );
+}

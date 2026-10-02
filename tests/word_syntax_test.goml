@@ -1,0 +1,47 @@
+package tests;
+
+use ecosystem::mime;
+use std::testing;
+
+#[test]
+fn encoded_text_rejects_empty_and_hidden_base64_whitespace() -> () {
+    for value in[
+        "=?UTF-8?B??=",
+        "=?UTF-8?Q??=",
+        "=?UTF-8?B?YQ==\r\n?=",
+        "=?UTF-8?B?YQ==\n?=",
+        "=?UTF-8?B?Y Q==?=",
+        "=?UTF-8?B?YQ==\t?=",
+    ] {
+        testing::assert(mime::decode_word(value, mime::Limits::standard()).is_err());
+    }
+    for encoding in[mime::WordEncoding::Quoted, mime::WordEncoding::Base64] {
+        testing::assert_eq(
+            testing::expect_ok(mime::encode_word("", encoding, mime::Limits::standard()), "empty"),
+            "",
+        );
+    }
+}
+
+#[test]
+fn q_words_escape_phrase_and_comment_punctuation() -> () {
+    let value = "Doe, Jane (team) <x@y> \"quote\" \\ _?";
+    let encoded = testing::expect_ok(
+        mime::encode_word(value, mime::WordEncoding::Quoted, mime::Limits::standard()),
+        "encode",
+    );
+    for word in encoded.split(" ") {
+        testing::assert(word.byte_len() <= 75);
+        for byte in word.byte_slice(10, word.byte_len() - 2).to_bytes() {
+            testing::assert(
+                (byte >= b'A' && byte <= b'Z') || (byte >= b'a' && byte <= b'z')
+                    || (byte >= b'0' && byte <= b'9')
+                    || b"!*+-/=_".contains(byte),
+            );
+        }
+    }
+    testing::assert_eq(
+        testing::expect_ok(mime::decode_header(encoded, mime::Limits::standard()), "round trip"),
+        value,
+    );
+}
