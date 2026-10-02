@@ -86,6 +86,14 @@ pub fn decode_word(value: string, limits: Limits) -> Result[string, Error] {
         return Result::Err(failure(ErrorKind::Invalid, 2, "invalid encoded word header"))
     }
     let payload = rest.byte_slice(2, rest.byte_len());
+    if payload == "" {
+        return Result::Err(failure(ErrorKind::Invalid, 0, "empty encoded word payload"))
+    }
+    for byte in payload.to_bytes() {
+        if byte < 33 || byte > 126 || byte == b'?' {
+            return Result::Err(failure(ErrorKind::Invalid, 0, "invalid encoded word payload"))
+        }
+    }
     let data = if rest.byte_get(0) == b'B' || rest.byte_get(0) == b'b' {
         base64::decode(payload).map_err(|error| failure(ErrorKind::Invalid, 0, error.to_string()))?
     } else if rest.byte_get(0) == b'Q' || rest.byte_get(0) == b'q' {
@@ -171,7 +179,13 @@ fn q_encode(data: bytes::Bytes) -> string {
     for byte in data.as_slice() {
         if byte == b' ' {
             output.push(b'_');
-        } else if byte >= 33 && byte <= 126 && byte != b'=' && byte != b'?' && byte != b'_' {
+        } else if (byte >= b'A' && byte <= b'Z') || (byte >= b'a' && byte <= b'z')
+            || (byte >= b'0' && byte <= b'9')
+            || byte == b'!'
+            || byte == b'*'
+            || byte == b'+'
+            || byte == b'-'
+            || byte == b'/' {
             output.push(byte);
         } else {
             output.push(b'=');
@@ -205,6 +219,9 @@ pub fn encode_word(value: string, encoding: WordEncoding, limits: Limits) -> Res
         if byte < 32 && byte != b'\t' || byte == 127 {
             return Result::Err(failure(ErrorKind::Invalid, 0, "invalid word byte"))
         }
+    }
+    if value == "" {
+        return Result::Ok("")
     }
     let current = bytes::Bytes::new();
     let mut result = "";

@@ -11,7 +11,12 @@ parameters when values contain non-ASCII characters.
 accepts UTF-8, US-ASCII and ISO-8859-1 and produces UTF-8 text. Adjacent
 encoded words discard intervening horizontal whitespace. Malformed encoded
 words are rejected rather than silently retained. `encode_word` emits UTF-8
-B/Q words split at scalar boundaries and limited to 75 bytes per word.
+B/Q words split at scalar boundaries and limited to 75 bytes per word. Q output
+uses the restricted alphabet permitted in address display-name phrases and
+comments, escaping punctuation such as commas, quotes and parentheses. Empty
+input encodes as an empty string. Decoding requires nonempty printable ASCII
+encoded text without spaces, tabs or line breaks, including in Base64 words,
+as required by [RFC 2047](https://www.rfc-editor.org/rfc/rfc2047.html#section-2).
 
 `Limits` bounds input, output, parameter count and value sizes. Inputs and
 outputs are GoML strings, so raw invalid UTF-8 octets are outside this API.
