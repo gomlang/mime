@@ -22,3 +22,15 @@ transport limits and accepted media types.
 The `quotedprintable` child package provides streaming transfer encoding and
 strict decoding as a separate byte-oriented contract. The `multipart` child
 package streams bounded part headers and binary bodies using textproto fields.
+
+## Development and examples
+
+Requires GoML 0.1.55 or newer. The `examples/basic/` example shares the root manifest and its dependencies. From the library root, run:
+
+```sh
+goml run --example basic
+goml test
+goml verify --timeout 300s
+```
+
+`goml test` builds the example and runs its tests. `goml verify` repeats the example checks as an independent module against an isolated registry snapshot. `(cd ../verification && just ecosystem-test mime)` also retains the library-specific smoke and compatibility checks.

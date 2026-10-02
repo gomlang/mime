@@ -1,6 +1,6 @@
 package tests;
 
-use ecosystem::consumers::mime;
+use ecosystem::mime::examples::basic as mime;
 use std::testing;
 
 #[test]
