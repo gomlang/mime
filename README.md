@@ -26,7 +26,8 @@ transport limits and accepted media types.
 
 The `quotedprintable` child package provides streaming transfer encoding and
 strict decoding as a separate byte-oriented contract. The `multipart` child
-package streams bounded part headers and binary bodies using textproto fields.
+package streams bounded part headers and binary bodies using textproto fields,
+including bounded transport padding on boundary lines.
 
 ## Development and examples
 

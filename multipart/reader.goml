@@ -17,16 +17,73 @@ fn prefix_bytes(candidate: bytes::Bytes, pattern: bytes::Bytes) -> bool {
     true
 }
 
-fn equal_bytes(candidate: bytes::Bytes, pattern: bytes::Bytes) -> bool {
-    candidate.len() == pattern.len() && prefix_bytes(candidate, pattern)
+fn boundary_padding(byte: byte) -> bool {
+    byte == b' ' || byte == b'\t'
+}
+
+fn boundary_match(
+    candidate: bytes::Bytes,
+    marker: bytes::Bytes,
+    eof: bool,
+    padding_offset: Ref[isize],
+) -> isize {
+    if candidate.len() < marker.len() {
+        return if prefix_bytes(candidate, marker) {
+            -1
+        } else {
+            0
+        }
+    }
+    for index in 0..marker.len() {
+        if candidate.get(index) != marker.get(index) {
+            return 0
+        }
+    }
+    let mut index = marker.len();
+    let mut kind = 1;
+    if index < candidate.len() && candidate.get(index) == b'-' {
+        index += 1;
+        if index == candidate.len() {
+            return -1
+        }
+        if candidate.get(index) != b'-' {
+            return 0
+        }
+        index += 1;
+        kind = 3;
+    }
+    if padding_offset.get() > index {
+        index = padding_offset.get();
+    }
+    while index < candidate.len() && boundary_padding(candidate.get(index)) {
+        index += 1;
+    }
+    padding_offset.set(index);
+    if index == candidate.len() {
+        return if eof && kind == 3 {
+            3
+        } else {
+            -1
+        }
+    }
+    if candidate.get(index) != b'\r' {
+        return 0
+    }
+    index += 1;
+    if index == candidate.len() {
+        return -1
+    }
+    if candidate.get(index) == b'\n' && index + 1 == candidate.len() {
+        kind
+    } else {
+        0
+    }
 }
 
 pub struct Reader[R] {
     source: io::BufReader[R],
     boundary: string,
     marker: bytes::Bytes,
-    opening: bytes::Bytes,
-    closing: bytes::Bytes,
     limits: Limits,
     phase: Ref[isize],
     next_phase: Ref[isize],
@@ -38,6 +95,7 @@ pub struct Reader[R] {
     part_bytes: Ref[isize],
     total_bytes: Ref[isize],
     scan: bytes::Bytes,
+    padding_offset: Ref[isize],
     pending: bytes::Bytes,
     position: Ref[isize],
 }
@@ -52,8 +110,6 @@ impl[R: Read] Reader[R] {
                 source: io::BufReader::new(source),
                 boundary,
                 marker,
-                opening: bytes::Bytes::from_string("\r\n--" + boundary + "\r\n"),
-                closing: bytes::Bytes::from_string("\r\n--" + boundary + "--\r\n"),
                 limits,
                 phase: Ref::new(0),
                 next_phase: Ref::new(0),
@@ -65,6 +121,7 @@ impl[R: Read] Reader[R] {
                 part_bytes: Ref::new(0),
                 total_bytes: Ref::new(0),
                 scan: bytes::Bytes::new(),
+                padding_offset: Ref::new(0),
                 pending: bytes::Bytes::new(),
                 position: Ref::new(0),
             },
@@ -142,13 +199,25 @@ impl[R: Read] Reader[R] {
         if limit < last.byte_len() {
             limit = last.byte_len();
         }
+        if limit < self.limits.max_line_bytes {
+            limit = self.limits.max_line_bytes;
+        }
         loop {
             let Some(line) = self.line(limit, true)? else {
                 return Result::Err(
                     failure(ErrorKind::Truncated, self.wire.get(), "missing first boundary"),
                 )
             };
-            let (valid, value) = string_from_utf8(line.to_vec());
+            let mut end = line.len();
+            while end > 0 && boundary_padding(line.get(end - 1)) {
+                end -= 1;
+            }
+            let (valid, value) = string_from_utf8(line.slice(0, end).to_vec());
+            if valid && (value == first || value == last) && line.len() > self.limits.max_line_bytes {
+                return Result::Err(
+                    failure(ErrorKind::Limit, self.wire.get(), "boundary line exceeds limit"),
+                )
+            }
             if valid && value == first {
                 self.phase.set(1);
                 return Result::Ok(())
@@ -281,6 +350,7 @@ impl[R: Read] Reader[R] {
         self.parts.set(self.parts.get() + 1);
         self.part_bytes.set(0);
         self.scan.clear();
+        self.padding_offset.set(0);
         self.pending.clear();
         self.position.set(0);
         self.next_phase.set(0);
@@ -290,8 +360,7 @@ impl[R: Read] Reader[R] {
 
     fn step(self: Reader[R]) -> Result[(), Error] {
         let Some(byte) = self.byte()? else {
-            let suffix = bytes::Bytes::from_string("\r\n--" + self.boundary + "--");
-            if equal_bytes(self.scan, suffix) {
+            if boundary_match(self.scan, self.marker, true, self.padding_offset) == 3 {
                 self.scan.clear();
                 self.next_phase.set(3);
                 return Result::Ok(())
@@ -302,30 +371,46 @@ impl[R: Read] Reader[R] {
         };
         self.scan.push(byte);
         loop {
-            if equal_bytes(self.scan, self.opening) {
-                self.scan.clear();
-                self.next_phase.set(1);
-                return Result::Ok(())
-            }
-            if equal_bytes(self.scan, self.closing) {
-                self.scan.clear();
-                self.next_phase.set(3);
-                return Result::Ok(())
-            }
-            if prefix_bytes(self.scan, self.opening) || prefix_bytes(self.scan, self.closing) {
+            let matched = boundary_match(self.scan, self.marker, false, self.padding_offset);
+            if matched != 0 {
+                let allowance = if matched > 0 {
+                    4
+                } else if self.scan.len() > 0 && self.scan.get(self.scan.len() - 1) == b'\r' {
+                    3
+                } else {
+                    2
+                };
+                if self.scan.len() > allowance
+                    && self.scan.len() - allowance > self.limits.max_line_bytes {
+                    return Result::Err(
+                        failure(ErrorKind::Limit, self.wire.get(), "boundary line exceeds limit"),
+                    )
+                }
+                if matched > 0 {
+                    self.scan.clear();
+                    self.next_phase.set(matched);
+                }
                 return Result::Ok(())
             }
             if self.scan.len() == 0 {
                 return Result::Ok(())
             }
-            if self.part_bytes.get() >= self.limits.max_part_bytes
-                || self.total_bytes.get() >= self.limits.max_total_bytes {
+            self.padding_offset.set(0);
+            let mut amount = self.scan.len();
+            for index in 1..self.scan.len() {
+                if self.scan.get(index) == b'\r' {
+                    amount = index;
+                    break
+                }
+            }
+            if amount > self.limits.max_part_bytes - self.part_bytes.get()
+                || amount > self.limits.max_total_bytes - self.total_bytes.get() {
                 return Result::Err(failure(ErrorKind::Limit, self.wire.get(), "body exceeds limit"))
             }
-            self.pending.push(self.scan.get(0));
-            self.part_bytes.set(self.part_bytes.get() + 1);
-            self.total_bytes.set(self.total_bytes.get() + 1);
-            let rest = bytes::Bytes::from_slice_copy(self.scan.slice(1, self.scan.len()));
+            self.pending.extend_from_slice(self.scan.slice(0, amount));
+            self.part_bytes.set(self.part_bytes.get() + amount);
+            self.total_bytes.set(self.total_bytes.get() + amount);
+            let rest = bytes::Bytes::from_slice_copy(self.scan.slice(amount, self.scan.len()));
             self.scan.clear();
             self.scan.extend_from_slice(rest.as_slice());
         }

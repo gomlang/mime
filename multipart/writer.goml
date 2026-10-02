@@ -52,7 +52,7 @@ pub struct Writer[W] {
     marker_state: Ref[isize],
     opening_state: Ref[isize],
     closing_state: Ref[isize],
-    tail_marker: Ref[bool],
+    padding_state: Ref[isize],
     limits: Limits,
     phase: Ref[isize],
     broken: Ref[bool],
@@ -82,7 +82,7 @@ impl[W: Write] Writer[W] {
                 marker_state: Ref::new(0),
                 opening_state: Ref::new(0),
                 closing_state: Ref::new(0),
-                tail_marker: Ref::new(false),
+                padding_state: Ref::new(0),
                 limits,
                 phase: Ref::new(0),
                 broken: Ref::new(false),
@@ -166,7 +166,7 @@ impl[W: Write] Writer[W] {
     }
 
     fn check_tail(self: Writer[W]) -> Result[(), Error] {
-        if self.tail_marker.get() {
+        if self.padding_state.get() == 1 {
             self.broken.set(true);
             return Result::Err(
                 failure(ErrorKind::Boundary, self.wire.get(), "body ends with boundary marker"),
@@ -213,16 +213,34 @@ impl[W: Write] Writer[W] {
         self.marker_state.set(0);
         self.opening_state.set(0);
         self.closing_state.set(0);
-        self.tail_marker.set(false);
+        self.padding_state.set(0);
         self.phase.set(1);
         Result::Ok(())
     }
 
     fn boundary_collision(self: Writer[W], input: Slice[byte]) -> Result[(), Error] {
         for byte in input {
-            self.tail_marker.set(
-                advance_pattern(self.marker, self.marker_table, self.marker_state, byte),
+            if self.padding_state.get() == 2 && byte == b'\n' {
+                return Result::Err(
+                    failure(
+                        ErrorKind::Boundary,
+                        self.wire.get(),
+                        "body contains padded boundary delimiter",
+                    ),
+                )
+            }
+            self.padding_state.set(
+                if self.padding_state.get() == 1 && boundary_padding(byte) {
+                    1
+                } else if self.padding_state.get() == 1 && byte == b'\r' {
+                    2
+                } else {
+                    0
+                },
             );
+            if advance_pattern(self.marker, self.marker_table, self.marker_state, byte) {
+                self.padding_state.set(1);
+            }
             if advance_pattern(self.opening, self.opening_table, self.opening_state, byte)
                 || advance_pattern(self.closing, self.closing_table, self.closing_state, byte) {
                 return Result::Err(
