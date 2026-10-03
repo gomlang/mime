@@ -1,0 +1,163 @@
+package tests;
+
+use ecosystem::mime::multipart;
+use multipart::{ErrorKind, Limits, Reader};
+use std::bytes;
+use std::io;
+use io::Read;
+use std::testing;
+
+#[test]
+fn discard_skips_remaining_bytes_and_advances_parts_without_retaining_body() -> () {
+    let wire = bytes::Bytes::from_vec(
+        b"--x\r\n\r\nabc\r\n--x\r\n\r\n\r\n--x\r\n\r\ndef\r\n--x--\r\n",
+    );
+    let reader = testing::expect_ok(
+        Reader::new(io::Cursor::new(wire), "x", Limits::standard()),
+        "reader",
+    );
+    testing::assert_eq(testing::expect_err(reader.discard_body(), "no part").kind, ErrorKind::State);
+    testing::assert_some(testing::expect_ok(reader.next_part(), "first"));
+    let scratch = bytes::Bytes::from_vec(b"_");
+    testing::assert_eq(
+        testing::expect_ok(reader.read_body_chunk(scratch.as_mut_slice()), "prefix"),
+        1,
+    );
+    testing::assert_eq(scratch.get(0), b'a');
+    testing::assert_eq(testing::expect_ok(reader.discard_body(), "remainder"), 2);
+    testing::assert_eq(
+        testing::expect_err(reader.discard_body(), "already drained").kind,
+        ErrorKind::State,
+    );
+    testing::assert_some(testing::expect_ok(reader.next_part(), "empty"));
+    testing::assert_eq(testing::expect_ok(reader.discard_body(), "empty body"), 0);
+    testing::assert_some(testing::expect_ok(reader.next_part(), "last"));
+    testing::assert_eq(testing::expect_ok(reader.discard_body(), "last body"), 3);
+    testing::assert_eq(reader.body_bytes(), 6);
+    testing::assert_eq(reader.part_count(), 3);
+    testing::assert_none(testing::expect_ok(reader.next_part(), "done"));
+    testing::assert_eq(
+        testing::expect_err(reader.discard_body(), "after end").kind,
+        ErrorKind::State,
+    );
+}
+
+#[test]
+fn discard_large_fragmented_body_preserves_false_boundaries_and_limits() -> () {
+    let wire = bytes::Bytes::from_vec(b"--x\r\n\r\n");
+    for _ in 0..1024 {
+        wire.extend_from_slice(b"ab\r\n--xZ".as_slice());
+    }
+    wire.extend_from_slice(b"\r\n--x--".as_slice());
+    let size = 8192;
+    let limits = Limits {
+        max_part_bytes: size,
+        max_total_bytes: size,
+        max_wire_bytes: wire.len(),
+        ..Limits::standard(),
+    };
+    let reader = testing::expect_ok(
+        Reader::new(FragmentedReader { data: wire, position: Ref::new(0) }, "x", limits),
+        "reader",
+    );
+    testing::assert_some(testing::expect_ok(reader.next_part(), "part"));
+    testing::assert_eq(testing::expect_ok(reader.discard_body(), "exact limits"), size);
+    testing::assert_none(testing::expect_ok(reader.next_part(), "done"));
+    for limits in Vec::from_array(
+        [
+            Limits { max_part_bytes: size - 1, ..limits },
+            Limits { max_total_bytes: size - 1, ..limits },
+            Limits { max_wire_bytes: wire.len() - 1, ..limits },
+        ],
+    ) {
+        let reader = testing::expect_ok(Reader::new(io::Cursor::new(wire), "x", limits), "bounded");
+        testing::assert_some(testing::expect_ok(reader.next_part(), "part"));
+        testing::assert_eq(
+            testing::expect_err(reader.discard_body(), "limit").kind,
+            ErrorKind::Limit,
+        );
+        testing::assert_eq(
+            testing::expect_err(reader.discard_body(), "terminal").kind,
+            ErrorKind::Closed,
+        );
+    }
+}
+
+struct BodyFailure {
+    prefix: bytes::Bytes,
+    position: Ref[isize],
+    failures: Ref[isize],
+}
+
+impl Read for BodyFailure {
+    fn read(self: BodyFailure, output: MutSlice[byte]) -> Result[isize, io::Error] {
+        if self.position.get() < self.prefix.len() {
+            output[0] = self.prefix.get(self.position.get());
+            self.position.set(self.position.get() + 1);
+            return Result::Ok(1)
+        }
+        self.failures.set(self.failures.get() + 1);
+        Result::Err(
+            io::Error::new(
+                io::ErrorKind::Other,
+                "read",
+                Option::None,
+                Option::None,
+                "body source failed",
+            ),
+        )
+    }
+}
+
+#[test]
+fn discard_surfaces_deferred_source_errors_and_truncation_once() -> () {
+    let source = BodyFailure {
+        prefix: bytes::Bytes::from_vec(b"--x\r\n\r\nbody"),
+        position: Ref::new(0),
+        failures: Ref::new(0),
+    };
+    let reader = testing::expect_ok(Reader::new(source, "x", Limits::standard()), "reader");
+    testing::assert_some(testing::expect_ok(reader.next_part(), "part"));
+    testing::assert_eq(
+        testing::expect_err(reader.discard_body(), "source error").kind,
+        ErrorKind::Io,
+    );
+    testing::assert_eq(testing::expect_err(reader.next_part(), "terminal").kind, ErrorKind::Closed);
+    testing::assert_eq(
+        testing::expect_err(reader.discard_body(), "terminal discard").kind,
+        ErrorKind::Closed,
+    );
+    testing::assert_eq(source.failures.get(), 1);
+    let reader = testing::expect_ok(
+        Reader::new(io::Cursor::new(source.prefix), "x", Limits::standard()),
+        "truncated",
+    );
+    testing::assert_some(testing::expect_ok(reader.next_part(), "part"));
+    testing::assert_eq(
+        testing::expect_err(reader.discard_body(), "truncated body").kind,
+        ErrorKind::Truncated,
+    );
+    testing::assert_eq(
+        testing::expect_err(reader.discard_body(), "terminal").kind,
+        ErrorKind::Closed,
+    );
+}
+
+#[test]
+fn discard_charges_aggregate_budget_across_parts() -> () {
+    let reader = testing::expect_ok(
+        Reader::new(
+            io::Cursor::new(bytes::Bytes::from_vec(b"--x\r\n\r\nabc\r\n--x\r\n\r\nde\r\n--x--\r\n")),
+            "x",
+            Limits { max_total_bytes: 4, ..Limits::standard() },
+        ),
+        "reader",
+    );
+    testing::assert_some(testing::expect_ok(reader.next_part(), "first"));
+    testing::assert_eq(testing::expect_ok(reader.discard_body(), "first body"), 3);
+    testing::assert_some(testing::expect_ok(reader.next_part(), "second"));
+    testing::assert_eq(
+        testing::expect_err(reader.discard_body(), "aggregate limit").kind,
+        ErrorKind::Limit,
+    );
+}

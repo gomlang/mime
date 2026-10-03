@@ -23,6 +23,15 @@ buffer is bounded by the greater of `max_preamble_bytes`, `max_line_bytes` and
 the closing marker length, plus two CRLF bytes; `max_wire_bytes` also applies.
 The reader leaves any epilogue unread.
 
+`discard_body()` drains the remainder of the active body without retaining it,
+then returns the number of body bytes discarded by that call. It uses a fixed
+4096-byte scratch buffer and the same wire, part and aggregate limits as
+`read_body_chunk`; bytes already read by the caller are excluded from its return
+count. On success, `next_part()` can advance. Empty bodies return zero. Calling
+it before a part, after a completed body or after the final part returns `State`.
+Source, truncation and limit failures are propagated and make the reader
+terminal; a deferred source error is surfaced even after buffered body data.
+
 `Limits` bounds wire bytes, preamble, headers, line and value bytes, part bytes,
 aggregate body bytes, and part count. The package preserves duplicate headers
 and byte-valued metadata; applications choose their own form-data field and

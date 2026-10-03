@@ -416,6 +416,21 @@ impl[R: Read] Reader[R] {
         }
     }
 
+    pub fn discard_body(self: Reader[R]) -> Result[isize, Error] {
+        let scratch = bytes::Bytes::with_capacity(4096);
+        for _ in 0..4096 {
+            scratch.push(0);
+        }
+        let mut discarded = 0;
+        loop {
+            let count = self.read_body_chunk(scratch.as_mut_slice())?;
+            if count == 0 {
+                return Result::Ok(discarded)
+            }
+            discarded += count;
+        }
+    }
+
     pub fn read_body_chunk(self: Reader[R], output: MutSlice[byte]) -> Result[isize, Error] {
         if self.broken.get() {
             return Result::Err(

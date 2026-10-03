@@ -1,0 +1,37 @@
+package tests;
+
+use ecosystem::mime::multipart;
+use std::bytes;
+use std::io;
+use std::testing;
+
+#[test]
+fn downstream_can_skip_unwanted_parts_before_reading_selected_data() -> () {
+    let reader = testing::expect_ok(
+        multipart::Reader::new(
+            io::Cursor::new(
+                bytes::Bytes::from_vec(
+                    b"--x\r\nX-Part: skip\r\n\r\nsecret\r\n--x\r\nX-Part: keep\r\n\r\nOK\r\n--x--\r\n",
+                ),
+            ),
+            "x",
+            multipart::Limits::standard(),
+        ),
+        "reader",
+    );
+    testing::assert_some(testing::expect_ok(reader.next_part(), "skip headers"));
+    testing::assert_eq(testing::expect_ok(reader.discard_body(), "skip"), 6);
+    let headers = testing::expect_some(
+        testing::expect_ok(reader.next_part(), "keep headers"),
+        "part",
+    );
+    testing::assert(headers.values("x-part")[0].to_vec() == b"keep");
+    let output = bytes::Bytes::from_vec(b"__");
+    testing::assert_eq(
+        testing::expect_ok(reader.read_body_chunk(output.as_mut_slice()), "read selected"),
+        2,
+    );
+    testing::assert(output.to_vec() == b"OK");
+    testing::assert_eq(testing::expect_ok(reader.discard_body(), "finish selected"), 0);
+    testing::assert_none(testing::expect_ok(reader.next_part(), "done"));
+}
