@@ -1,0 +1,70 @@
+package tests;
+
+use ecosystem::mime;
+use std::testing;
+
+#[test]
+fn parameter_tokens_accept_the_complete_rfc2045_ascii_alphabet() -> () {
+    // RFC 2045 section 5.1 excludes CTLs, SPACE and tspecials, not braces.
+    let specials = b"()<>@,;:\\\"/[]?=";
+    for scalar in 0..128 {
+        let character = char_from_u32(scalar.to_u32()).unwrap_or('x').to_string();
+        let result = mime::parse_media_type(
+            "text/plain; key=" + character,
+            mime::Limits::standard(),
+        );
+        if scalar > 32 && scalar < 127 && !specials.contains(scalar.to_u8()) {
+            testing::assert(
+                testing::expect_ok(result, "valid MIME token character").parameter("key")
+                    == Option::Some(character),
+            );
+        } else {
+            testing::assert_err(result);
+        }
+    }
+}
+
+#[test]
+fn formatter_preserves_braces_in_parameter_names_and_values() -> () {
+    let value = mime::MediaType {
+        essence: "text/plain",
+        parameters: Vec::from_array([mime::Parameter { name: "X{ID}", value: "{value}" }]),
+    };
+    let encoded = testing::expect_ok(
+        mime::format_media_type(value, mime::Limits::standard()),
+        "brace parameter",
+    );
+    testing::assert_eq(encoded, "text/plain; x{id}={value}");
+    testing::assert(
+        testing::expect_ok(
+            mime::parse_media_type(encoded, mime::Limits::standard()),
+            "reread brace parameter",
+        ).parameter("X{ID}")
+            == Option::Some("{value}"),
+    );
+}
+
+#[test]
+fn extended_parameters_accept_literal_braces_around_utf8() -> () {
+    for source in[
+        "text/plain; filename*=utf-8''{caf%C3%A9}",
+        "text/plain; filename*0*=utf-8''{caf%C3; filename*1*=%A9}",
+    ] {
+        let parsed = testing::expect_ok(
+            mime::parse_media_type(source, mime::Limits::standard()),
+            "extended braces",
+        );
+        testing::assert(parsed.parameter("filename") == Option::Some("{café}"));
+        let encoded = testing::expect_ok(
+            mime::format_media_type(parsed, mime::Limits::standard()),
+            "format extended braces",
+        );
+        testing::assert(
+            testing::expect_ok(
+                mime::parse_media_type(encoded, mime::Limits::standard()),
+                "reread extended braces",
+            ).parameter("filename")
+                == Option::Some("{café}"),
+        );
+    }
+}

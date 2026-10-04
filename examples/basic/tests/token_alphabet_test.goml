@@ -1,0 +1,25 @@
+package tests;
+
+use ecosystem::mime;
+use std::testing;
+
+#[test]
+fn consumer_preserves_braces_in_mime_parameter_names_and_extended_values() -> () {
+    let limits = mime::Limits::standard();
+    let parsed = testing::expect_ok(
+        mime::parse_media_type("text/plain; x{id}=record; filename*=utf-8''{caf%C3%A9}", limits),
+        "MIME token alphabet",
+    );
+    testing::assert(parsed.parameter("X{ID}") == Option::Some("record"));
+    testing::assert(parsed.parameter("filename") == Option::Some("{café}"));
+    let output = testing::expect_ok(
+        mime::format_media_type(parsed, limits),
+        "format token alphabet",
+    );
+    let reparsed = testing::expect_ok(
+        mime::parse_media_type(output, limits),
+        "reread token alphabet",
+    );
+    testing::assert(reparsed.parameter("x{id}") == Option::Some("record"));
+    testing::assert(reparsed.parameter("filename") == Option::Some("{café}"));
+}

@@ -19,7 +19,9 @@ fn token_byte(value: byte) -> bool {
         || value == b'^'
         || value == b'_'
         || value == b'`'
+        || value == b'{'
         || value == b'|'
+        || value == b'}'
         || value == b'~'
 }
 
