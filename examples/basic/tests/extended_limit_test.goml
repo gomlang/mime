@@ -1,0 +1,21 @@
+package tests;
+
+use ecosystem::mime;
+use std::testing;
+
+#[test]
+fn downstream_media_parameters_roundtrip_with_exact_decoded_limits() -> () {
+    let limits = mime::Limits { max_value_bytes: 3, ..mime::Limits::standard() };
+    let wire = testing::expect_ok(
+        mime::format_media_type(
+            mime::MediaType {
+                essence: "text/plain",
+                parameters: Vec::from_array([mime::Parameter { name: "title", value: "中" }]),
+            },
+            limits,
+        ),
+        "format",
+    );
+    let value = testing::expect_ok(mime::parse_media_type(wire, limits), "parse same limits");
+    testing::assert_eq(testing::expect_some(value.parameter("title"), "title"), "中");
+}

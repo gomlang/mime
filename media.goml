@@ -358,7 +358,14 @@ pub fn parse_media_type(value: string, limits: Limits) -> Result[MediaType, Erro
         }
         position.set(position.get() + 1);
         skip_horizontal(value, position);
-        let parameter = consume_value(value, position, limits)?;
+        let value_limits = match classify_key(name, position.get(), limits)? {
+            ParameterKey::Single(_) | ParameterKey::Segment(_, _, true) => Limits {
+                max_value_bytes: limits.max_input_bytes,
+                ..limits,
+            },
+            _ => limits,
+        };
+        let parameter = consume_value(value, position, value_limits)?;
         raw.push(RawParameter { name, value: parameter, offset: position.get() });
         skip_horizontal(value, position);
     }

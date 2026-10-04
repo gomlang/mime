@@ -27,6 +27,11 @@ as required by [RFC 2047](https://www.rfc-editor.org/rfc/rfc2047.html#section-2)
 
 `Limits` bounds input, output, parameter count and value sizes. Inputs and
 outputs are GoML strings, so raw invalid UTF-8 octets are outside this API.
+`max_value_bytes` bounds each decoded parameter value, including the combined
+bytes of RFC 2231 continuations and any unencoded continuation segments.
+Percent escapes and charset/language metadata count toward `max_input_bytes`,
+so an extended value can round-trip with the same decoded-value budget used
+by the formatter. Quoted-string escapes likewise count after unescaping.
 The root-package helpers do not parse multipart bodies, transfer encodings, or
 email addresses. Applications retain authority over header line folding,
 transport limits and accepted media types.

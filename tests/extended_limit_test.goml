@@ -1,0 +1,135 @@
+package tests;
+
+use ecosystem::mime;
+use mime::{ErrorKind, Limits, MediaType, Parameter};
+use std::testing;
+
+fn parameter_text(wire: string, limits: Limits) -> string {
+    let value = testing::expect_ok(mime::parse_media_type(wire, limits), "parse parameter");
+    testing::expect_some(value.parameter("x"), "parameter x")
+}
+
+#[test]
+fn extended_parameter_roundtrips_at_its_exact_decoded_byte_budget() -> () {
+    for value in Vec::from_array(["é", "中", "\té", ""]) {
+        let limits = Limits { max_value_bytes: value.byte_len(), ..Limits::standard() };
+        let media = MediaType {
+            essence: "text/plain",
+            parameters: Vec::from_array([Parameter { name: "x", value }]),
+        };
+        let wire = testing::expect_ok(
+            mime::format_media_type(media, limits),
+            "format within value budget",
+        );
+        testing::assert_eq(parameter_text(wire, limits), value);
+        if value != "" {
+            testing::assert_eq(
+                testing::expect_err(
+                    mime::parse_media_type(
+                        wire,
+                        Limits { max_value_bytes: value.byte_len() - 1, ..limits },
+                    ),
+                    "decoded value overflow",
+                ).kind,
+                ErrorKind::Limit,
+            );
+        }
+    }
+    testing::assert_eq(
+        parameter_text(
+            "text/plain; x*=utf-8''",
+            Limits { max_value_bytes: 0, ..Limits::standard() },
+        ),
+        "",
+    );
+}
+
+#[test]
+fn standard_parameter_limits_allow_percent_expansion_within_total_input() -> () {
+    let mut value = "";
+    for _ in 0..4096 {
+        value += "é";
+    }
+    let limits = Limits::standard();
+    let wire = testing::expect_ok(
+        mime::format_media_type(
+            MediaType {
+                essence: "text/plain",
+                parameters: Vec::from_array([Parameter { name: "x", value }]),
+            },
+            limits,
+        ),
+        "format large UTF-8 value",
+    );
+    testing::assert(wire.byte_len() > limits.max_value_bytes);
+    testing::assert_eq(parameter_text(wire, limits), value);
+    testing::assert_eq(
+        testing::expect_err(
+            mime::parse_media_type(wire, Limits { max_input_bytes: wire.byte_len() - 1, ..limits }),
+            "wire input overflow",
+        ).kind,
+        ErrorKind::Limit,
+    );
+}
+
+#[test]
+fn continuation_limits_charge_combined_decoded_and_unencoded_segments() -> () {
+    for wire in Vec::from_array(
+        [
+            "text/plain; x*0*=utf-8''%C3; x*1*=%A9; x*2=!",
+            "text/plain; x*2=!; x*1*=%A9; x*0*=utf-8''%C3",
+            "text/plain; x*0=!; x*1*=%C3%A9",
+        ],
+    ) {
+        let expected = if wire.contains("x*0=!") {
+            "!é"
+        } else {
+            "é!"
+        };
+        testing::assert_eq(
+            parameter_text(wire, Limits { max_value_bytes: 3, ..Limits::standard() }),
+            expected,
+        );
+        testing::assert_eq(
+            testing::expect_err(
+                mime::parse_media_type(wire, Limits { max_value_bytes: 2, ..Limits::standard() }),
+                "combined decoded overflow",
+            ).kind,
+            ErrorKind::Limit,
+        );
+    }
+    let wire = "text/plain; x*0=ab; x*1=cd";
+    testing::assert_eq(
+        parameter_text(wire, Limits { max_value_bytes: 4, ..Limits::standard() }),
+        "abcd",
+    );
+    testing::assert_eq(
+        testing::expect_err(
+            mime::parse_media_type(wire, Limits { max_value_bytes: 3, ..Limits::standard() }),
+            "unencoded continuation overflow",
+        ).kind,
+        ErrorKind::Limit,
+    );
+}
+
+#[test]
+fn decoded_parameter_budgets_preserve_syntax_and_input_validation() -> () {
+    for (wire, expected) in Vec::from_array(
+        [
+            ("text/plain; x*=ascii''abc", ErrorKind::Charset),
+            ("text/plain; x*=utf-8''%Q0", ErrorKind::Invalid),
+            ("text/plain; x*=utf-8''%", ErrorKind::Invalid),
+            ("text/plain; x*0*=utf-8''%C3; x*2*=%A9", ErrorKind::Invalid),
+            ("text/plain; x*0=abcd", ErrorKind::Limit),
+            ("text/plain; x=abcd", ErrorKind::Limit),
+        ],
+    ) {
+        testing::assert_eq(
+            testing::expect_err(
+                mime::parse_media_type(wire, Limits { max_value_bytes: 3, ..Limits::standard() }),
+                "invalid or oversized parameter",
+            ).kind,
+            expected,
+        );
+    }
+}
