@@ -417,14 +417,16 @@ fn encoded_parameter(name: string, value: string) -> Result[string, Error] {
     if token(value) {
         return Result::Ok(name + "=" + value)
     }
-    let mut quoted = "\"";
+    let quoted: Vec[byte] = Vec::new();
+    quoted.push(b'"');
     for byte in value.to_bytes() {
         if byte == b'"' || byte == b'\\' {
-            quoted += "\\";
+            quoted.push(b'\\');
         }
-        quoted += string_from_utf8(Vec::from_array([byte])).1;
+        quoted.push(byte);
     }
-    Result::Ok(name + "=" + quoted + "\"")
+    quoted.push(b'"');
+    Result::Ok(name + "=" + string_from_utf8(quoted).1)
 }
 
 pub fn format_media_type(value: MediaType, limits: Limits) -> Result[string, Error] {
