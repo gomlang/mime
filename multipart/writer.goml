@@ -191,6 +191,11 @@ impl[W: Write] Writer[W] {
                 failure(ErrorKind::Limit, self.wire.get(), "part count exceeds limit"),
             )
         }
+        if self.boundary.byte_len() + 2 > self.limits.max_line_bytes {
+            return Result::Err(
+                failure(ErrorKind::Limit, self.wire.get(), "boundary line exceeds limit"),
+            )
+        }
         if self.parts.get() > 0 {
             self.check_tail()?;
         }
@@ -293,6 +298,11 @@ impl[W: Write] Writer[W] {
         }
         if self.phase.get() == 2 {
             return Result::Ok(())
+        }
+        if self.boundary.byte_len() + 4 > self.limits.max_line_bytes {
+            return Result::Err(
+                failure(ErrorKind::Limit, self.wire.get(), "closing boundary line exceeds limit"),
+            )
         }
         if self.parts.get() > 0 {
             self.check_tail()?;

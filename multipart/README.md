@@ -5,6 +5,9 @@ validated boundary. `begin_part(textproto::Headers)` serializes one header
 block, `write_body_chunk` emits arbitrary binary data, and `finish` writes the
 closing delimiter without closing the sink. Body data that would form a
 delimiter is rejected, including matches split across input chunks.
+The writer applies `max_line_bytes` to header and boundary line content,
+excluding CRLF. Oversized opening or closing delimiters fail before writing
+any bytes for that operation.
 
 `Reader[R: Read]` accepts a bounded preamble, exposes part headers through
 `next_part`, and streams each body through `read_body_chunk`. A body must be

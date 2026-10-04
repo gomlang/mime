@@ -1,0 +1,27 @@
+package tests;
+
+use ecosystem::mime::multipart;
+use ecosystem::textproto;
+use std::bytes;
+use std::io;
+use std::testing;
+
+#[test]
+fn downstream_multipart_writer_checks_closing_boundary_line_budget() -> () {
+    let sink = io::Cursor::new(bytes::Bytes::new());
+    let writer = testing::expect_ok(
+        multipart::Writer::new(
+            sink,
+            "x",
+            multipart::Limits { max_line_bytes: 4, ..multipart::Limits::standard() },
+        ),
+        "writer",
+    );
+    testing::assert_ok(writer.begin_part(textproto::Headers::new()));
+    let before = sink.bytes().to_vec();
+    testing::assert_eq(
+        testing::expect_err(writer.finish(), "closing line budget").kind,
+        multipart::ErrorKind::Limit,
+    );
+    testing::assert(sink.bytes().to_vec() == before);
+}

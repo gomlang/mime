@@ -1,0 +1,73 @@
+package tests;
+
+use ecosystem::mime::multipart;
+use ecosystem::textproto;
+use std::bytes;
+use std::io;
+use std::testing;
+
+#[test]
+fn multipart_writer_bounds_opening_boundary_lines_before_output() -> () {
+    let sink = io::Cursor::new(bytes::Bytes::new());
+    let writer = testing::expect_ok(
+        multipart::Writer::new(
+            sink,
+            "x",
+            multipart::Limits { max_line_bytes: 2, ..multipart::Limits::standard() },
+        ),
+        "writer",
+    );
+    testing::assert_eq(
+        testing::expect_err(
+            writer.begin_part(textproto::Headers::new()),
+            "oversized opening marker",
+        ).kind,
+        multipart::ErrorKind::Limit,
+    );
+    testing::assert_eq(sink.bytes().len(), 0);
+    testing::assert_eq(writer.wire_bytes(), 0);
+}
+
+#[test]
+fn multipart_writer_bounds_closing_boundary_lines_with_and_without_parts() -> () {
+    for with_part in Vec::from_array([false, true]) {
+        let sink = io::Cursor::new(bytes::Bytes::new());
+        let writer = testing::expect_ok(
+            multipart::Writer::new(
+                sink,
+                "x",
+                multipart::Limits { max_line_bytes: 4, ..multipart::Limits::standard() },
+            ),
+            "writer",
+        );
+        if with_part {
+            testing::assert_ok(writer.begin_part(textproto::Headers::new()));
+        }
+        let previous = sink.bytes().len();
+        testing::assert_eq(
+            testing::expect_err(writer.finish(), "oversized closing marker").kind,
+            multipart::ErrorKind::Limit,
+        );
+        testing::assert_eq(sink.bytes().len(), previous);
+        testing::assert_eq(writer.wire_bytes(), previous);
+    }
+}
+
+#[test]
+fn multipart_exact_boundary_line_budget_round_trips_multiple_parts() -> () {
+    let sink = io::Cursor::new(bytes::Bytes::new());
+    let limits = multipart::Limits { max_line_bytes: 5, ..multipart::Limits::standard() };
+    let writer = testing::expect_ok(multipart::Writer::new(sink, "x", limits), "writer");
+    for _ in 0..2 {
+        testing::assert_ok(writer.begin_part(textproto::Headers::new()));
+        testing::assert_ok(writer.write_body_chunk(b"body".as_slice()));
+    }
+    testing::assert_ok(writer.finish());
+    testing::assert_ok(sink.set_position(0));
+    let reader = testing::expect_ok(multipart::Reader::new(sink, "x", limits), "reader");
+    for _ in 0..2 {
+        testing::assert(testing::expect_ok(reader.next_part(), "part").is_some());
+        testing::assert_eq(testing::expect_ok(reader.discard_body(), "body"), 4);
+    }
+    testing::assert(testing::expect_ok(reader.next_part(), "end").is_none());
+}
