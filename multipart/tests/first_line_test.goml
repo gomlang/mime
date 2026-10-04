@@ -1,0 +1,124 @@
+package tests;
+
+use ecosystem::mime::multipart;
+use multipart::{ErrorKind, Limits, Reader, Writer};
+use ecosystem::textproto;
+use std::bytes;
+use std::io;
+use std::testing;
+
+#[test]
+fn multipart_reader_recognizes_closing_delimiters_at_body_start() -> () {
+    // These empty-body cases also agree with Go mime/multipart and Python email.
+    for closing in["--x--", "--x--\r\n", "--x-- \t", "--x-- \t\r\n"] {
+        for width in[1, 8] {
+            let wire = bytes::Bytes::from_string("--x\r\n\r\n" + closing);
+            let reader = testing::expect_ok(
+                Reader::new(
+                    FragmentedReader { data: wire, position: Ref::new(0) },
+                    "x",
+                    Limits { max_part_bytes: 0, max_total_bytes: 0, ..Limits::standard() },
+                ),
+                "reader",
+            );
+            testing::assert_some(testing::expect_ok(reader.next_part(), "part"));
+            testing::assert_eq(testing::expect_ok(body(reader, width), "empty body").len(), 0);
+            testing::assert_none(testing::expect_ok(reader.next_part(), "done"));
+            testing::assert_eq(reader.body_bytes(), 0);
+            testing::assert_eq(reader.consumed(), wire.len());
+        }
+    }
+}
+
+#[test]
+fn multipart_reader_recognizes_next_parts_at_body_start() -> () {
+    for padding in["", " \t"] {
+        let wire = bytes::Bytes::from_string(
+            "--x\r\n\r\n--x" + padding + "\r\n\r\nnext\r\n--x--\r\n",
+        );
+        let reader = testing::expect_ok(
+            Reader::new(
+                FragmentedReader { data: wire, position: Ref::new(0) },
+                "x",
+                Limits::standard(),
+            ),
+            "reader",
+        );
+        testing::assert_some(testing::expect_ok(reader.next_part(), "first"));
+        testing::assert_eq(testing::expect_ok(body(reader, 1), "empty first body").len(), 0);
+        testing::assert_some(testing::expect_ok(reader.next_part(), "second"));
+        testing::assert(testing::expect_ok(body(reader, 2), "second body").to_vec() == b"next");
+        testing::assert_none(testing::expect_ok(reader.next_part(), "done"));
+        testing::assert_eq(reader.part_count(), 2);
+        testing::assert_eq(reader.body_bytes(), 4);
+    }
+}
+
+#[test]
+fn multipart_writer_rejects_first_line_collisions_across_chunks() -> () {
+    for source in["--x\r\n", "--x--", "--x \t\r\n"] {
+        let input = source.to_bytes();
+        for split in 0..input.len() + 1 {
+            let writer = testing::expect_ok(
+                Writer::new(io::Cursor::new(bytes::Bytes::new()), "x", Limits::standard()),
+                "writer",
+            );
+            testing::assert_ok(writer.begin_part(textproto::Headers::new()));
+            let result = writer.write_body_chunk(input.slice(0, split)).and_then(
+                |_| writer.write_body_chunk(input.slice(split, input.len())),
+            );
+            testing::assert_eq(
+                testing::expect_err(result, "first-line collision").kind,
+                ErrorKind::Boundary,
+            );
+            testing::assert_eq(
+                testing::expect_err(writer.finish(), "terminal").kind,
+                ErrorKind::Closed,
+            );
+        }
+    }
+}
+
+#[test]
+fn multipart_writer_rejects_first_line_markers_completed_by_final_framing() -> () {
+    for source in["--x", "--x \t"] {
+        let writer = testing::expect_ok(
+            Writer::new(io::Cursor::new(bytes::Bytes::new()), "x", Limits::standard()),
+            "writer",
+        );
+        testing::assert_ok(writer.begin_part(textproto::Headers::new()));
+        for byte in source.to_bytes() {
+            testing::assert_ok(writer.write_body_chunk(Vec::from_array([byte]).as_slice()));
+        }
+        testing::assert_eq(
+            testing::expect_err(writer.finish(), "tail collision").kind,
+            ErrorKind::Boundary,
+        );
+    }
+}
+
+#[test]
+fn multipart_first_line_false_prefixes_preserve_exact_body_budgets() -> () {
+    for source in["", "a", "-", "--xX", "--x-!", "--x \t!", "\r", "\n", "\r\n", "\r\n--xX"] {
+        let limits = Limits {
+            max_part_bytes: source.byte_len(),
+            max_total_bytes: source.byte_len(),
+            ..Limits::standard(),
+        };
+        let sink = io::Cursor::new(bytes::Bytes::new());
+        let writer = testing::expect_ok(Writer::new(sink, "x", limits), "writer");
+        testing::assert_ok(writer.begin_part(textproto::Headers::new()));
+        for byte in source.to_bytes() {
+            testing::assert_ok(writer.write_body_chunk(Vec::from_array([byte]).as_slice()));
+        }
+        testing::assert_ok(writer.finish());
+        let reader = testing::expect_ok(
+            Reader::new(FragmentedReader { data: sink.bytes(), position: Ref::new(0) }, "x", limits),
+            "reader",
+        );
+        testing::assert_some(testing::expect_ok(reader.next_part(), "part"));
+        testing::assert(testing::expect_ok(body(reader, 1), "body").to_vec() == source.to_bytes());
+        testing::assert_none(testing::expect_ok(reader.next_part(), "done"));
+        testing::assert_eq(reader.body_bytes(), source.byte_len());
+    }
+}

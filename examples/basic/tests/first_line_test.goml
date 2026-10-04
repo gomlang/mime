@@ -1,0 +1,32 @@
+package tests;
+
+use ecosystem::mime::multipart;
+use ecosystem::textproto;
+use std::bytes;
+use std::io;
+use std::testing;
+
+#[test]
+fn consumer_handles_empty_multipart_body_and_rejects_first_line_collisions() -> () {
+    let limits = multipart::Limits::standard();
+    let reader = testing::expect_ok(
+        multipart::Reader::new(
+            io::Cursor::new(bytes::Bytes::from_string("--x\r\n\r\n--x--\r\n")),
+            "x",
+            limits,
+        ),
+        "reader",
+    );
+    testing::assert_some(testing::expect_ok(reader.next_part(), "part"));
+    testing::assert_eq(testing::expect_ok(reader.discard_body(), "empty body"), 0);
+    testing::assert_none(testing::expect_ok(reader.next_part(), "done"));
+    let sink = io::Cursor::new(bytes::Bytes::new());
+    let writer = testing::expect_ok(multipart::Writer::new(sink, "x", limits), "writer");
+    testing::assert_ok(writer.begin_part(textproto::Headers::new()));
+    let before = sink.bytes().len();
+    testing::assert_eq(
+        testing::expect_err(writer.write_body_chunk(b"--x--".as_slice()), "first-line collision").kind,
+        multipart::ErrorKind::Boundary,
+    );
+    testing::assert_eq(sink.bytes().len(), before);
+}

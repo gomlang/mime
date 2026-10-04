@@ -5,6 +5,8 @@ validated boundary. `begin_part(textproto::Headers)` serializes one header
 block, `write_body_chunk` emits arbitrary binary data, and `finish` writes the
 closing delimiter without closing the sink. Body data that would form a
 delimiter is rejected, including matches split across input chunks.
+This includes the first body line immediately after the header separator and
+markers that would become delimiters when the writer finishes the part.
 The writer applies `max_line_bytes` to header and boundary line content,
 excluding CRLF. Oversized opening or closing delimiters fail before writing
 any bytes for that operation.
@@ -18,6 +20,8 @@ terminal. Boundary lines accept trailing ASCII space/tab transport padding as re
 including the initial boundary, intervening boundaries and the closing delimiter.
 The closing delimiter may end with CRLF or at EOF after padding. Boundary line
 content, including marker and padding, is bounded by `max_line_bytes`.
+An opening or closing delimiter immediately after the header separator ends an
+empty body. The separator is counted as header/wire bytes, never as body bytes.
 Within a part body, oversized potential boundaries fail while padding is read;
 false boundary prefixes remain body data within those bounds. Before the first
 part, the reader buffers a complete line to distinguish preamble from a delimiter,

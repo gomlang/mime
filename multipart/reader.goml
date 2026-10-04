@@ -95,6 +95,7 @@ pub struct Reader[R] {
     part_bytes: Ref[isize],
     total_bytes: Ref[isize],
     scan: bytes::Bytes,
+    scan_prefix: Ref[isize],
     padding_offset: Ref[isize],
     pending: bytes::Bytes,
     position: Ref[isize],
@@ -121,6 +122,7 @@ impl[R: Read] Reader[R] {
                 part_bytes: Ref::new(0),
                 total_bytes: Ref::new(0),
                 scan: bytes::Bytes::new(),
+                scan_prefix: Ref::new(0),
                 padding_offset: Ref::new(0),
                 pending: bytes::Bytes::new(),
                 position: Ref::new(0),
@@ -350,6 +352,10 @@ impl[R: Read] Reader[R] {
         self.parts.set(self.parts.get() + 1);
         self.part_bytes.set(0);
         self.scan.clear();
+        // The header's blank line already supplied CRLF before the body.
+        // Seed delimiter recognition without returning or charging these bytes.
+        self.scan.extend_from_slice(b"\r\n".as_slice());
+        self.scan_prefix.set(2);
         self.padding_offset.set(0);
         self.pending.clear();
         self.position.set(0);
@@ -362,6 +368,7 @@ impl[R: Read] Reader[R] {
         let Some(byte) = self.byte()? else {
             if boundary_match(self.scan, self.marker, true, self.padding_offset) == 3 {
                 self.scan.clear();
+                self.scan_prefix.set(0);
                 self.next_phase.set(3);
                 return Result::Ok(())
             }
@@ -388,6 +395,7 @@ impl[R: Read] Reader[R] {
                 }
                 if matched > 0 {
                     self.scan.clear();
+                    self.scan_prefix.set(0);
                     self.next_phase.set(matched);
                 }
                 return Result::Ok(())
@@ -403,13 +411,20 @@ impl[R: Read] Reader[R] {
                     break
                 }
             }
-            if amount > self.limits.max_part_bytes - self.part_bytes.get()
-                || amount > self.limits.max_total_bytes - self.total_bytes.get() {
+            let prefix = if self.scan_prefix.get() < amount {
+                self.scan_prefix.get()
+            } else {
+                amount
+            };
+            let body_amount = amount - prefix;
+            if body_amount > self.limits.max_part_bytes - self.part_bytes.get()
+                || body_amount > self.limits.max_total_bytes - self.total_bytes.get() {
                 return Result::Err(failure(ErrorKind::Limit, self.wire.get(), "body exceeds limit"))
             }
-            self.pending.extend_from_slice(self.scan.slice(0, amount));
-            self.part_bytes.set(self.part_bytes.get() + amount);
-            self.total_bytes.set(self.total_bytes.get() + amount);
+            self.pending.extend_from_slice(self.scan.slice(prefix, amount));
+            self.scan_prefix.set(self.scan_prefix.get() - prefix);
+            self.part_bytes.set(self.part_bytes.get() + body_amount);
+            self.total_bytes.set(self.total_bytes.get() + body_amount);
             let rest = bytes::Bytes::from_slice_copy(self.scan.slice(amount, self.scan.len()));
             self.scan.clear();
             self.scan.extend_from_slice(rest.as_slice());

@@ -215,9 +215,10 @@ impl[W: Write] Writer[W] {
         self.send(encoded)?;
         self.parts.set(self.parts.get() + 1);
         self.part_bytes.set(0);
-        self.marker_state.set(0);
-        self.opening_state.set(0);
-        self.closing_state.set(0);
+        // The header's final CRLF also makes the first body byte a line start.
+        self.marker_state.set(2);
+        self.opening_state.set(2);
+        self.closing_state.set(2);
         self.padding_state.set(0);
         self.phase.set(1);
         Result::Ok(())
