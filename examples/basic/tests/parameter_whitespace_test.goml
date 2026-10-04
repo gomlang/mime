@@ -1,0 +1,20 @@
+package tests;
+
+use ecosystem::mime;
+use std::testing;
+
+#[test]
+fn consumer_can_format_parsed_parameter_tabs() -> () {
+    let input = "text/plain; note=\"keep\ttab\"";
+    let parsed = testing::expect_ok(
+        mime::parse_media_type(input, mime::Limits::standard()),
+        "parse parameter tab",
+    );
+    testing::assert_eq(
+        testing::expect_ok(
+            mime::format_media_type(parsed, mime::Limits::standard()),
+            "format parameter tab",
+        ),
+        input,
+    );
+}

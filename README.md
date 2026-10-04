@@ -4,8 +4,11 @@ Pure GoML MIME value helpers. `parse_media_type` and `format_media_type` handle
 type/subtype values, quoted parameters, and UTF-8 RFC 2231 extended parameters
 and continuations. Names are ASCII-case-normalized; values remain case-sensitive.
 Duplicate names, continuation gaps, malformed percent escapes, unsupported
-charsets and decoded control bytes are errors. Formatting emits UTF-8 extended
-parameters when values contain non-ASCII characters.
+charsets and decoded control bytes other than horizontal tabs are errors.
+Formatting preserves tabs in quoted values, matching the parser's accepted
+parameter values and [RFC 2045](https://www.rfc-editor.org/rfc/rfc2045.html#section-5.1)
+quoted-string syntax. It emits UTF-8 extended parameters when values contain
+non-ASCII characters, including percent-encoding any tabs in those values.
 
 `decode_word` and `decode_header` handle RFC 2047 B/Q encoded words. Decoding
 accepts UTF-8, US-ASCII and ISO-8859-1 and produces UTF-8 text. Adjacent

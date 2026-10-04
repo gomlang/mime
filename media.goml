@@ -385,7 +385,7 @@ pub fn parse_media_type(value: string, limits: Limits) -> Result[MediaType, Erro
 fn encoded_parameter(name: string, value: string) -> Result[string, Error] {
     let mut extended = false;
     for byte in value.to_bytes() {
-        if byte < 32 || byte == 127 {
+        if byte < 32 && byte != b'\t' || byte == 127 {
             return Result::Err(failure(ErrorKind::Invalid, 0, "invalid parameter byte"))
         }
         if byte >= 128 {

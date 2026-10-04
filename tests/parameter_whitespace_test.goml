@@ -1,0 +1,63 @@
+package tests;
+
+use ecosystem::mime;
+use std::testing;
+
+#[test]
+fn media_parameter_tabs_survive_parse_format_round_trips() -> () {
+    for (source, expected, value) in Vec::from_array(
+        [
+            ("text/plain; note=\"a\tb\"", "text/plain; note=\"a\tb\"", "a\tb"),
+            ("text/plain; note=\"\t\"", "text/plain; note=\"\t\"", "\t"),
+            ("text/plain; note=\"a\\\tb\"", "text/plain; note=\"a\tb\"", "a\tb"),
+            ("text/plain; note*=utf-8''%C3%A9%09", "text/plain; note*=utf-8''%C3%A9%09", "é\t"),
+        ],
+    ) {
+        let parsed = testing::expect_ok(
+            mime::parse_media_type(source, mime::Limits::standard()),
+            "parse tab parameter",
+        );
+        testing::assert_eq(testing::expect_some(parsed.parameter("note"), "note"), value);
+        let encoded = testing::expect_ok(
+            mime::format_media_type(parsed, mime::Limits::standard()),
+            "format tab parameter",
+        );
+        testing::assert_eq(encoded, expected);
+        let reparsed = testing::expect_ok(
+            mime::parse_media_type(encoded, mime::Limits::standard()),
+            "reparse tab parameter",
+        );
+        testing::assert_eq(testing::expect_some(reparsed.parameter("note"), "note"), value);
+    }
+}
+
+#[test]
+fn media_parameter_tab_formatting_preserves_output_bounds_and_control_rejection() -> () {
+    let media = mime::MediaType {
+        essence: "text/plain",
+        parameters: Vec::from_array([mime::Parameter { name: "note", value: "\t" }]),
+    };
+    let exact = "text/plain; note=\"\t\"".byte_len();
+    let limits = mime::Limits { max_output_bytes: exact, ..mime::Limits::standard() };
+    testing::assert_ok(mime::format_media_type(media, limits));
+    testing::assert_eq(
+        testing::expect_err(
+            mime::format_media_type(media, mime::Limits { max_output_bytes: exact - 1, ..limits }),
+            "output limit",
+        ).kind,
+        mime::ErrorKind::Limit,
+    );
+    for value in Vec::from_array(["\u0000", "\r", "\n", "\u000b", "\u000c", "\u007f"]) {
+        let media = mime::MediaType {
+            essence: "text/plain",
+            parameters: Vec::from_array([mime::Parameter { name: "note", value }]),
+        };
+        testing::assert_eq(
+            testing::expect_err(
+                mime::format_media_type(media, mime::Limits::standard()),
+                "invalid control",
+            ).kind,
+            mime::ErrorKind::Invalid,
+        );
+    }
+}
