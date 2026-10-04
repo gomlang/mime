@@ -61,7 +61,7 @@ impl[R: Read] Reader[R] {
             }
             wire.extend_from_slice(buffer.sub(0, count));
             self.source.consume(count)?;
-            if terminated || wire.len() == cap {
+            if terminated || wire.len() == cap || wire.len() == 77 && wire.get(76) != b'\r' {
                 return Result::Ok(wire)
             }
         }

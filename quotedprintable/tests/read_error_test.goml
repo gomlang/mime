@@ -12,6 +12,7 @@ struct FaultAfterPrefix {
     position: Ref[isize],
     calls: Ref[isize],
     fault: io::Error,
+    width: isize,
 }
 
 impl Read for FaultAfterPrefix {
@@ -21,11 +22,14 @@ impl Read for FaultAfterPrefix {
             return Result::Err(self.fault)
         }
         let remaining = self.prefix.len() - self.position.get();
-        let count = if remaining < output.len() {
+        let mut count = if remaining < output.len() {
             remaining
         } else {
             output.len()
         };
+        if count > self.width {
+            count = self.width;
+        }
         for index in 0..count {
             output[index] = self.prefix[self.position.get() + index];
         }
@@ -39,6 +43,7 @@ fn faulty(prefix: Vec[byte]) -> FaultAfterPrefix {
         prefix,
         position: Ref::new(0),
         calls: Ref::new(0),
+        width: 8192,
         fault: io::Error::new(
             io::ErrorKind::InvalidData,
             "source decode",
@@ -92,7 +97,11 @@ fn quoted_printable_reports_known_limits_before_another_provider_read() -> () {
         long.push(b'A');
     }
     for (prefix, limits) in Vec::from_array(
-        [(long, Limits::standard()), (b"AB", Limits { max_input_bytes: 1, ..Limits::standard() })],
+        [
+            (long.slice(0, 77).to_vec(), Limits::standard()),
+            (long, Limits::standard()),
+            (b"AB", Limits { max_input_bytes: 1, ..Limits::standard() }),
+        ],
     ) {
         let source = faulty(prefix);
         let reader = testing::expect_ok(Reader::new(source, limits), "reader");
@@ -107,4 +116,23 @@ fn quoted_printable_reports_known_limits_before_another_provider_read() -> () {
         );
         testing::assert_eq(source.calls.get(), 1);
     }
+}
+
+#[test]
+fn quoted_printable_waits_for_lf_after_a_full_width_line_and_cr() -> () {
+    let prefix = Vec::new();
+    for _ in 0..76 {
+        prefix.push(b'A');
+    }
+    prefix.push(b'\r');
+    prefix.push(b'\n');
+    let source = FaultAfterPrefix { width: 1, ..faulty(prefix) };
+    let reader = testing::expect_ok(Reader::new(source, Limits::standard()), "reader");
+    let output = bytes::Bytes::from_vec(prefix.copy());
+    testing::assert_eq(
+        testing::expect_ok(reader.read_chunk(output.as_mut_slice()), "full width CRLF"),
+        78,
+    );
+    testing::assert(output.to_vec() == prefix);
+    testing::assert_eq(source.calls.get(), 78);
 }
