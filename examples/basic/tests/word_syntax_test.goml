@@ -4,6 +4,14 @@ use ecosystem::mime;
 use std::testing;
 
 #[test]
+fn downstream_short_encoded_word_is_a_recoverable_error() -> () {
+    testing::assert_eq(
+        testing::expect_err(mime::decode_word("=?=", mime::Limits::standard()), "short word").kind,
+        mime::ErrorKind::Invalid,
+    );
+}
+
+#[test]
 fn downstream_encodes_address_phrase_safely() -> () {
     let encoded = testing::expect_ok(
         mime::encode_word("Doe, Jane", mime::WordEncoding::Quoted, mime::Limits::standard()),

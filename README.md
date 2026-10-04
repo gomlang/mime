@@ -13,7 +13,8 @@ non-ASCII characters, including percent-encoding any tabs in those values.
 `decode_word` and `decode_header` handle RFC 2047 B/Q encoded words. Decoding
 accepts UTF-8, US-ASCII and ISO-8859-1 and produces UTF-8 text. Adjacent
 encoded words discard intervening horizontal whitespace. Malformed encoded
-words are rejected rather than silently retained. `encode_word` emits UTF-8
+words, including truncated or overlapping framing markers, return errors.
+`encode_word` emits UTF-8
 B/Q words split at scalar boundaries and limited to 75 bytes per word. Q output
 uses the restricted alphabet permitted in address display-name phrases and
 comments, escaping punctuation such as commas, quotes and parentheses. Empty

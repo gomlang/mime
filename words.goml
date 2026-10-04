@@ -75,7 +75,7 @@ pub fn decode_word(value: string, limits: Limits) -> Result[string, Error] {
     if value.byte_len() > limits.max_input_bytes || value.byte_len() > 75 {
         return Result::Err(failure(ErrorKind::Limit, 0, "encoded word exceeds limit"))
     }
-    if !value.starts_with("=?") || !value.ends_with("?=") {
+    if value.byte_len() < 4 || !value.starts_with("=?") || !value.ends_with("?=") {
         return Result::Err(failure(ErrorKind::Invalid, 0, "invalid encoded word framing"))
     }
     let inside = value.byte_slice(2, value.byte_len() - 2);

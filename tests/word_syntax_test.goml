@@ -4,6 +4,25 @@ use ecosystem::mime;
 use std::testing;
 
 #[test]
+fn short_encoded_word_framing_returns_errors_without_panicking() -> () {
+    for wire in Vec::from_array(["", "=", "?", "=?", "?=", "=?="]) {
+        testing::assert_eq(
+            testing::expect_err(mime::decode_word(wire, mime::Limits::standard()), "short framing").kind,
+            mime::ErrorKind::Invalid,
+        );
+    }
+    let valid = "=?US-ASCII?Q?a?=";
+    for end in 0..valid.byte_len() {
+        testing::assert_err(mime::decode_word(valid.byte_slice(0, end), mime::Limits::standard()));
+    }
+    for start in 1..valid.byte_len() {
+        testing::assert_err(
+            mime::decode_word(valid.byte_slice(start, valid.byte_len()), mime::Limits::standard()),
+        );
+    }
+}
+
+#[test]
 fn encoded_text_rejects_empty_and_hidden_base64_whitespace() -> () {
     for value in[
         "=?UTF-8?B??=",
