@@ -1,0 +1,110 @@
+package tests;
+
+use ecosystem::mime::quotedprintable;
+use quotedprintable::{ErrorKind, Limits, Reader};
+use std::bytes;
+use std::io;
+use io::Read;
+use std::testing;
+
+struct FaultAfterPrefix {
+    prefix: Vec[byte],
+    position: Ref[isize],
+    calls: Ref[isize],
+    fault: io::Error,
+}
+
+impl Read for FaultAfterPrefix {
+    fn read(self: FaultAfterPrefix, output: MutSlice[byte]) -> Result[isize, io::Error] {
+        self.calls.set(self.calls.get() + 1);
+        if self.position.get() == self.prefix.len() {
+            return Result::Err(self.fault)
+        }
+        let remaining = self.prefix.len() - self.position.get();
+        let count = if remaining < output.len() {
+            remaining
+        } else {
+            output.len()
+        };
+        for index in 0..count {
+            output[index] = self.prefix[self.position.get() + index];
+        }
+        self.position.set(self.position.get() + count);
+        Result::Ok(count)
+    }
+}
+
+fn faulty(prefix: Vec[byte]) -> FaultAfterPrefix {
+    FaultAfterPrefix {
+        prefix,
+        position: Ref::new(0),
+        calls: Ref::new(0),
+        fault: io::Error::new(
+            io::ErrorKind::InvalidData,
+            "source decode",
+            Option::Some("upstream"),
+            Option::Some(7),
+            "source rejected data",
+        ),
+    }
+}
+
+#[test]
+fn quoted_printable_retains_invalid_data_provider_errors_as_io_failures() -> () {
+    for prefix in Vec::from_array([b"", b"partial", b"A\r\n"]) {
+        let source = faulty(prefix);
+        let reader = testing::expect_ok(Reader::new(source, Limits::standard()), "reader");
+        let output = bytes::Bytes::from_vec(Vec::from_array([0.to_u8(), 0, 0]));
+        if prefix == b"A\r\n" {
+            testing::assert_eq(
+                testing::expect_ok(reader.read_chunk(output.as_mut_slice()), "completed line"),
+                3,
+            );
+            testing::assert(output.to_vec() == prefix);
+        }
+        let problem = testing::expect_err(
+            reader.read_chunk(output.as_mut_slice()),
+            "provider error",
+        );
+        testing::assert_eq(problem.kind, ErrorKind::Io);
+        testing::assert_eq(testing::expect_some(problem.cause, "original cause"), source.fault);
+        testing::assert_eq(
+            problem.offset,
+            if prefix == b"A\r\n" {
+                3
+            } else {
+                0
+            },
+        );
+        let calls = source.calls.get();
+        testing::assert_eq(
+            testing::expect_err(reader.read_chunk(output.as_mut_slice()), "terminal reader").kind,
+            ErrorKind::Closed,
+        );
+        testing::assert_eq(source.calls.get(), calls);
+    }
+}
+
+#[test]
+fn quoted_printable_reports_known_limits_before_another_provider_read() -> () {
+    let long = Vec::new();
+    for _ in 0..78 {
+        long.push(b'A');
+    }
+    for (prefix, limits) in Vec::from_array(
+        [(long, Limits::standard()), (b"AB", Limits { max_input_bytes: 1, ..Limits::standard() })],
+    ) {
+        let source = faulty(prefix);
+        let reader = testing::expect_ok(Reader::new(source, limits), "reader");
+        let output = bytes::Bytes::from_vec(Vec::from_array([0.to_u8()]));
+        let problem = testing::expect_err(reader.read_chunk(output.as_mut_slice()), "known limit");
+        testing::assert_eq(problem.kind, ErrorKind::Limit);
+        testing::assert(problem.cause.is_none());
+        testing::assert_eq(source.calls.get(), 1);
+        testing::assert_eq(
+            testing::expect_err(reader.read_chunk(output.as_mut_slice()), "terminal reader").kind,
+            ErrorKind::Closed,
+        );
+        testing::assert_eq(source.calls.get(), 1);
+    }
+}

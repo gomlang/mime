@@ -1,0 +1,38 @@
+package tests;
+
+use ecosystem::mime::quotedprintable;
+use std::bytes;
+use std::io;
+use io::Read;
+use std::testing;
+
+struct InvalidDataSource {}
+
+impl Read for InvalidDataSource {
+    fn read(self: InvalidDataSource, output: MutSlice[byte]) -> Result[isize, io::Error] {
+        Result::Err(
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "upstream",
+                Option::None,
+                Option::None,
+                "invalid source data",
+            ),
+        )
+    }
+}
+
+#[test]
+fn downstream_quoted_printable_keeps_invalid_data_io_cause() -> () {
+    let reader = testing::expect_ok(
+        quotedprintable::Reader::new(InvalidDataSource {}, quotedprintable::Limits::standard()),
+        "reader",
+    );
+    let output = bytes::Bytes::from_vec(Vec::from_array([0.to_u8()]));
+    let problem = testing::expect_err(reader.read_chunk(output.as_mut_slice()), "source fault");
+    testing::assert_eq(problem.kind, quotedprintable::ErrorKind::Io);
+    testing::assert_eq(
+        testing::expect_some(problem.cause, "cause").kind(),
+        io::ErrorKind::InvalidData,
+    );
+}

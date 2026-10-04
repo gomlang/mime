@@ -42,6 +42,31 @@ impl[R: Read] Reader[R] {
         self.output.get()
     }
 
+    fn wire_line(self: Reader[R], cap: isize) -> Result[bytes::Bytes, io::Error] {
+        let wire = bytes::Bytes::new();
+        loop {
+            let buffer = self.source.fill_buf()?;
+            if buffer.len() == 0 {
+                return Result::Ok(wire)
+            }
+            let mut count = 0;
+            let mut terminated = false;
+            while count < buffer.len() && count < cap - wire.len() {
+                let byte = buffer[count];
+                count += 1;
+                if byte == b'\n' {
+                    terminated = true;
+                    break
+                }
+            }
+            wire.extend_from_slice(buffer.sub(0, count));
+            self.source.consume(count)?;
+            if terminated || wire.len() == cap {
+                return Result::Ok(wire)
+            }
+        }
+    }
+
     fn refill(self: Reader[R]) -> Result[(), Error] {
         let remaining = self.limits.max_input_bytes - self.input.get();
         let cap = if remaining >= 77 {
@@ -49,13 +74,9 @@ impl[R: Read] Reader[R] {
         } else {
             remaining + 1
         };
-        let wire = self.source.read_until(b'\n', cap).map_err(
+        let wire = self.wire_line(cap).map_err(
             |error| Error {
-                kind: if error.kind() == io::ErrorKind::InvalidData {
-                    ErrorKind::Limit
-                } else {
-                    ErrorKind::Io
-                },
+                kind: ErrorKind::Io,
                 offset: self.input.get(),
                 message: error.to_string(),
                 cause: Option::Some(error),

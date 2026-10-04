@@ -17,3 +17,8 @@ whitespace is escaped. Soft breaks keep physical lines within 76 characters.
 provider failures are retained as causes. This package intentionally uses a
 strict RFC 2045-oriented policy rather than Go's permissive broken-mail
 recovery behavior.
+
+Every read-provider failure, including `io::ErrorKind::InvalidData`, is reported
+as `ErrorKind::Io` with the original cause. Once buffered bytes establish an
+input or encoded-line limit violation, decoding reports `Limit` without another
+provider read; this local limit error has no I/O cause.
