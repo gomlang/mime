@@ -43,12 +43,11 @@ including bounded transport padding on boundary lines.
 
 ## Development and examples
 
-Requires GoML 0.1.56 or newer. The `examples/basic/` example shares the root manifest and its dependencies. From the library root, run:
+Requires the source-built GoML toolchain with unversioned registry support pinned in [verification/ci/toolchain.json](https://github.com/gomlang/verification/blob/main/ci/toolchain.json). The `examples/basic/` example shares the root manifest and its dependencies. From the library root, run:
 
 ```sh
 goml run --example basic
 goml test
-goml verify --timeout 300s
 ```
 
-`goml test` builds the example and runs its tests. `goml verify` repeats the example checks as an independent module against an isolated registry snapshot. `(cd ../verification && just ecosystem-test mime)` also retains the library-specific smoke and compatibility checks.
+`goml test` builds the example and runs its tests. `(cd ../verification && just ecosystem-test mime)` also retains the library-specific smoke and compatibility checks.

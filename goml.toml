@@ -2,4 +2,4 @@
 path = "ecosystem::mime"
 
 [dependencies]
-"ecosystem::textproto" = "0.1.0"
+"ecosystem::textproto" = true
