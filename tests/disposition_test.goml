@@ -1,0 +1,52 @@
+package tests;
+
+use ecosystem::mime;
+use std::testing;
+
+#[test]
+fn form_disposition_roundtrip_and_validation() -> () {
+    let limits = mime::Limits::standard();
+    testing::assert_eq(
+        testing::expect_ok(
+            mime::format_form_disposition(
+                mime::FormDisposition { name: "字段", filename: Some("résumé.txt") },
+                limits,
+            ),
+            "UTF8 wire",
+        ),
+        "form-data; name=\"字段\"; filename=\"résumé.txt\"",
+    );
+    for name in["", "field", "中文", "a\"b\\c"] {
+        for filename in["../secret", "C:\\path\\file", "résumé.txt", ""] {
+            let encoded = testing::expect_ok(
+                mime::format_form_disposition(
+                    mime::FormDisposition { name, filename: Some(filename) },
+                    limits,
+                ),
+                "format",
+            );
+            let decoded = testing::expect_ok(mime::parse_form_disposition(encoded, limits), "parse");
+            testing::assert_eq(decoded.name, name);
+            testing::assert(decoded.filename == Option::Some(filename));
+        }
+    }
+    for wire in[
+        "attachment; name=x",
+        "form-data",
+        "form-data; name=x; name=y",
+        "form-data; name=x; filename=a; filename*=utf-8''b",
+        "form-data; name=\"a\tb\"",
+        "form-data; name=x\r\n",
+    ] {
+        testing::assert(mime::parse_form_disposition(wire, limits).is_err());
+    }
+    testing::assert(
+        mime::format_form_disposition(mime::FormDisposition { name: "x\n", filename: None }, limits).is_err(),
+    );
+    testing::assert(
+        mime::format_form_disposition(
+            mime::FormDisposition { name: "x", filename: None },
+            mime::Limits { max_output_bytes: 10, ..limits },
+        ).is_err(),
+    );
+}

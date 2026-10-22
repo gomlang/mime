@@ -1,0 +1,58 @@
+package mime;
+
+pub struct FormDisposition {
+    pub name: string,
+    pub filename: Option[string],
+}
+
+fn form_text(value: string) -> Result[(), Error] {
+    for octet in value.to_bytes() {
+        if octet < 32 || octet == 127 {
+            return Result::Err(failure(ErrorKind::Invalid, 0, "control in form disposition"))
+        }
+    }
+    Result::Ok(())
+}
+
+pub fn parse_form_disposition(value: string, limits: Limits) -> Result[FormDisposition, Error] {
+    let parsed = parse_parameterized(value, limits, true)?;
+    if parsed.essence != "form-data" {
+        return Result::Err(failure(ErrorKind::Invalid, 0, "expected form-data disposition"))
+    }
+    let name = parsed.parameter("name").ok_or(
+        failure(ErrorKind::Invalid, 0, "missing form field name"),
+    )?;
+    form_text(name)?;
+    let filename = parsed.parameter("filename");
+    if let Some(value) = filename {
+        form_text(value)?;
+    }
+    Result::Ok(FormDisposition { name, filename })
+}
+
+pub fn format_form_disposition(value: FormDisposition, limits: Limits) -> Result[string, Error] {
+    limits.validate()?;
+    let parameters = Vec::from_array([Parameter { name: "name", value: value.name }]);
+    if let Some(filename) = value.filename {
+        parameters.push(Parameter { name: "filename", value: filename });
+    }
+    if parameters.len() > limits.max_parameters {
+        return Result::Err(failure(ErrorKind::Limit, 0, "too many form parameters"))
+    }
+    let mut output = "form-data";
+    for parameter in parameters {
+        form_text(parameter.value)?;
+        if parameter.value.byte_len() > limits.max_value_bytes {
+            return Result::Err(failure(ErrorKind::Limit, 0, "form parameter too long"))
+        }
+        let encoded = parameter.name + "=\""
+            + parameter.value.replace("\\", "\\\\").replace("\"", "\\\"")
+            + "\"";
+        if output.byte_len() > limits.max_output_bytes
+            || encoded.byte_len() + 2 > limits.max_output_bytes - output.byte_len() {
+            return Result::Err(failure(ErrorKind::Limit, 0, "form disposition too long"))
+        }
+        output += "; " + encoded;
+    }
+    Result::Ok(output)
+}

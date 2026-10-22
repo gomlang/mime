@@ -51,3 +51,14 @@ goml test
 ```
 
 `goml test` builds the example and runs its tests. `(cd ../workflows && just ecosystem-test mime)` also retains the library-specific smoke and compatibility checks.
+
+`parse_form_disposition` and `format_form_disposition` handle multipart form-data
+field names and optional filenames via `FormDisposition`. Parsing reuses the MIME
+parameter codec (including UTF-8 extended parameters), enforces `Limits`, rejects
+controls and duplicate parameters, and require the `form-data` disposition and
+an explicit name. Empty names/filenames are preserved. Unknown parameters are
+validated then ignored. Quotes and backslashes round-trip; filenames are raw
+metadata, including path separators, and are never sanitized or opened as paths.
+Unicode is not normalized. Formatting uses quoted UTF-8 values with quote/backslash escaping and never
+emits filename* (RFC 7578 §4.2). Parsing accepts extended parameters for
+compatibility, without allowing duplicate plain/extended field definitions.

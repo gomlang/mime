@@ -312,6 +312,10 @@ fn consume_value(value: string, position: Ref[isize], limits: Limits) -> Result[
 }
 
 pub fn parse_media_type(value: string, limits: Limits) -> Result[MediaType, Error] {
+    parse_parameterized(value, limits, false)
+}
+
+fn parse_parameterized(value: string, limits: Limits, disposition: bool) -> Result[MediaType, Error] {
     limits.validate()?;
     if value.byte_len() > limits.max_input_bytes {
         return Result::Err(failure(ErrorKind::Limit, 0, "media type exceeds input limit"))
@@ -319,18 +323,22 @@ pub fn parse_media_type(value: string, limits: Limits) -> Result[MediaType, Erro
     let position = Ref::new(0);
     skip_horizontal(value, position);
     let major = consume_token(value, position);
-    if major == "" || position.get() >= value.byte_len() || value.byte_get(position.get()) != b'/' {
-        return Result::Err(failure(ErrorKind::Invalid, position.get(), "invalid media type"))
+    let mut essence = major.to_ascii_lowercase();
+    if !disposition {
+        if major == "" || position.get() >= value.byte_len()
+            || value.byte_get(position.get()) != b'/' {
+            return Result::Err(failure(ErrorKind::Invalid, position.get(), "invalid media type"))
+        }
+        position.set(position.get() + 1);
+        let minor = consume_token(value, position);
+        if minor == "" {
+            return Result::Err(failure(ErrorKind::Invalid, position.get(), "missing media subtype"))
+        }
+        essence = major.to_ascii_lowercase() + "/" + minor.to_ascii_lowercase();
+    } else if major == "" {
+        return Result::Err(failure(ErrorKind::Invalid, position.get(), "missing disposition"))
     }
-    position.set(position.get() + 1);
-    let minor = consume_token(value, position);
-    if minor == "" {
-        return Result::Err(failure(ErrorKind::Invalid, position.get(), "missing media subtype"))
-    }
-    let result = MediaType {
-        essence: major.to_ascii_lowercase() + "/" + minor.to_ascii_lowercase(),
-        parameters: Vec::new(),
-    };
+    let result = MediaType { essence, parameters: Vec::new() };
     let raw: Vec[RawParameter] = Vec::new();
     skip_horizontal(value, position);
     while position.get() < value.byte_len() {
